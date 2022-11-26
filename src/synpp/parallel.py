@@ -17,10 +17,10 @@ class ParallelSlaveContext:
         return self._config[option]
 
     def data(self, name):
-        if not name in self._data:
+        if not hasattr(self._data, name):
             raise PipelineParallelError("Variable '%s' has not been passed to the parallel context" % name)
 
-        return self._data[name]
+        return getattr(self._data, name)
 
     def stage(self, *kargs, **kwargs):
         raise PipelineParallelError("Cannot access stages from the parallel context")
@@ -50,9 +50,11 @@ class ParallelMasterContext:
     def __init__(self, data, config, processes, progress_context, maxtasksperchild):
         if processes is None: processes = mp.cpu_count()
 
+        self.data = mp.Manager()
+        for k, v in data.items():
+            setattr(self.data, k, v)
         self.processes = processes
         self.config = config
-        self.data = data
         self.pool = None
         self.maxtasksperchild = maxtasksperchild
 
