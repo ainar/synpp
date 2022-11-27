@@ -1,6 +1,9 @@
 import multiprocessing as mp
+import copy
 from .general import PipelineParallelError
 from .progress import ProgressClient
+
+from pandas.core.generic import NDFrame
 
 class ParallelSlaveContext:
     def __init__(self, data, config, progress_port = None):
@@ -17,10 +20,10 @@ class ParallelSlaveContext:
         return self._config[option]
 
     def data(self, name):
-        if not hasattr(self._data, name):
+        if not name in self._data:
             raise PipelineParallelError("Variable '%s' has not been passed to the parallel context" % name)
 
-        return getattr(self._data, name)
+        return self._data[name]
 
     def stage(self, *kargs, **kwargs):
         raise PipelineParallelError("Cannot access stages from the parallel context")
@@ -30,7 +33,13 @@ class ParallelSlaveContext:
 
 def pipeline_initializer(pipeline_data, pipeline_config, pipeline_progress_port):
     global pipeline_parallel_context
-    pipeline_parallel_context = ParallelSlaveContext(pipeline_data, pipeline_config, pipeline_progress_port)
+    copied_data = dict()
+    for k, v in pipeline_data.items():
+        if isinstance(v, NDFrame):
+            copied_data[k] = v.copy()
+        else:
+            copied_data[k] = copy.deepcopy(v)
+    pipeline_parallel_context = ParallelSlaveContext(copied_data, pipeline_config, pipeline_progress_port)
 
 def pipeline_runner(args):
     global pipeline_parallel_context
@@ -50,9 +59,7 @@ class ParallelMasterContext:
     def __init__(self, data, config, processes, progress_context, maxtasksperchild):
         if processes is None: processes = mp.cpu_count()
 
-        self.data = mp.Manager()
-        for k, v in data.items():
-            setattr(self.data, k, v)
+        self.data = data
         self.processes = processes
         self.config = config
         self.pool = None
