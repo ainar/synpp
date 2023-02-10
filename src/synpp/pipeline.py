@@ -777,21 +777,20 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
 
     progress = 0
 
+    # General dependency cache to avoid loading the same cache in several stages in a row.
+    dependency_cache = {}
     for hash in sorted_hashes:
         if hash in stale_hashes:
             logger.info("Executing stage %s ..." % hash)
             stage = registry[hash]
 
-            # Load the dependencies, either from cache or from file
-            #stage_dependencies = []
-            #stage_dependency_info = {}
-
-            #if name in dependencies:
-            #    stage_dependencies = dependencies[name]
-            #
-            #    for parent in stage_dependencies:
-            #        stage_dependency_info[parent] = meta[parent]["info"]
-            #stage_dependencies =
+            # Deleting useless cache.
+            for dependency_definition in list(dependency_cache.keys()):
+                if dependency_definition not in stage["dependencies"]:
+                    logger.info(f"Deleting from memory {dependency_definition}")
+                    del dependency_cache[dependency_definition]
+                else:
+                    logger.info(f"Keeping in memory {dependency_definition}")
 
             stage_dependency_info = {}
             for dependency_hash in stage["dependencies"]:
@@ -805,7 +804,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                     rmtree(cache_path)
                 os.mkdir(cache_path)
 
-            context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info)
+            context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info, dependency_cache)
             result = stage["wrapper"].execute(context)
             validation_token = stage["wrapper"].validate(ValidateContext(stage["config"], cache_path))
 
@@ -817,7 +816,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             else:
                 with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
                     logger.info("Writing cache for %s" % hash)
-                    pickle.dump(result, f, protocol=4)
+                    pickle.dump(result, f, protocol=5)
 
             # Update meta information
             meta[hash] = {
