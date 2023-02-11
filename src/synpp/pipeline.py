@@ -782,7 +782,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
 
             # Delete useless cache
             for dependency_definition in list(dependency_cache.keys()):
-                if dependency_definition not in stage["dependencies"]:
+                if working_directory is not None and dependency_definition not in stage["dependencies"]:
                     logger.info(f"Deleting from memory {dependency_definition}")
                     del dependency_cache[dependency_definition]
                 else:
