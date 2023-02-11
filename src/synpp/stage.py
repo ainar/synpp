@@ -6,7 +6,7 @@ from typing import Callable
 
 from .exceptions import PipelineError
 from .progress import ProgressContext
-from .parallel import ParalelMockMasterContext, ParallelMasterContext
+from .parallel import ParallelMockMasterContext, ParallelMasterContext
 from .functions import (
     hash_name,
     flatten,
@@ -235,7 +235,7 @@ class ExecuteContext(Context):
             # Add mock context to run all parallel tasks in series and in
             # the same process. This can be useful for debugging and especially
             # for profiling the code.
-            return ParalelMockMasterContext(
+            return ParallelMockMasterContext(
                 data, config, self.progress_context
             )
         else:

@@ -163,7 +163,7 @@ class ParallelMockSlaveContext:
         )
 
 
-class ParalelMockMasterContext:
+class ParallelMockMasterContext:
     def __init__(self, data, config, progress):
         self.config = config
         self.data = data

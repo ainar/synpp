@@ -1,4 +1,4 @@
-from synpp.parallel import ParallelMasterContext, ParalelMockMasterContext
+from synpp.parallel import ParallelMasterContext, ParallelMockMasterContext
 import synpp
 
 def sum_up(context, argument):
@@ -39,7 +39,7 @@ def test_mock():
 
     arguments = [1000000, 2000000, 3000000]
 
-    with ParalelMockMasterContext(data, config, 3) as parallel:
+    with ParallelMockMasterContext(data, config, 3) as parallel:
         result = parallel.map(sum_up, arguments)
 
     assert result == [1001245, 2001245, 3001245]
@@ -49,12 +49,12 @@ def test_mock():
 
     #assert result == [1001245, 2001245, 3001245]
 
-    with ParalelMockMasterContext(data, config, 3) as parallel:
+    with ParallelMockMasterContext(data, config, 3) as parallel:
         result = list(parallel.imap(sum_up, arguments))
 
     assert result == [1001245, 2001245, 3001245]
 
-    with ParalelMockMasterContext(data, config, 3) as parallel:
+    with ParallelMockMasterContext(data, config, 3) as parallel:
         result = list(parallel.imap_unordered(sum_up, arguments))
 
     assert 1001245 in result
