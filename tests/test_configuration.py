@@ -121,7 +121,7 @@ def test_complex_config(tmpdir):
         synpp.run([{
             "descriptor": ComplexStageMaster,
             "config": config }], verbose = True, working_directory = working_directory)
-    except synpp.general.PipelineError:
+    except synpp.exceptions.PipelineError:
         raised = True
 
     assert raised

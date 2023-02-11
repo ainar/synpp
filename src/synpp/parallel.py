@@ -1,5 +1,5 @@
 import multiprocessing as mp
-from .general import PipelineParallelError
+from .exceptions import PipelineParallelError
 from .progress import ProgressClient
 
 class ParallelSlaveContext:
