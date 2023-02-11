@@ -669,11 +669,6 @@ def run(
         return results
 
 
-def run_from_yaml(path):
-    """Run pipeline from Yaml configuration file."""
-    Synpp.build_from_yml(path).run_pipeline()
-
-
 class Synpp:
     """
     Convenience class mostly for running stages individually.
@@ -825,14 +820,3 @@ def stage(function=None, *args, **kwargs):
             )
     else:  # unparameterized decorator
         return decorator(function)
-
-
-def get_context():
-    """Get context."""
-    stack = list(frame for frame in inspect.stack())
-    for frame in stack:
-        f_locals = dict(frame.frame.f_locals)
-        for name, obj in f_locals.items():
-            if name == "context" and isinstance(obj, Context):
-                return obj
-    return None
