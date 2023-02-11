@@ -337,11 +337,6 @@ class ExecuteContext(Context):
         if self.working_directory is None:
             return self.cache[dependency]
         else:
-            if not dependency in self.dependency_cache:
-                with open("%s/%s.p" % (self.working_directory, dependency), "rb") as f:
-                    self.logger.info("Loading cache for %s ..." % dependency)
-                    self.dependency_cache[dependency] = pickle.load(f)
-
             return self.dependency_cache[dependency]
 
     def path(self, name = None, config = {}):
@@ -792,9 +787,14 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 else:
                     logger.info(f"Keeping in memory {dependency_definition}")
 
+            # Load stage dependencies and dependency infos
             stage_dependency_info = {}
             for dependency_hash in stage["dependencies"]:
                 stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
+                if not dependency_hash in dependency_cache:
+                    with open("%s/%s.p" % (working_directory, dependency_hash), "rb") as f:
+                        logger.info("Loading cache for %s ..." % dependency_hash)
+                        dependency_cache[dependency_hash] = pickle.load(f)
 
             # Prepare cache path
             cache_path = "%s/%s.cache" % (working_directory, hash)
@@ -817,6 +817,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
                     logger.info("Writing cache for %s" % hash)
                     pickle.dump(result, f, protocol=5)
+                dependency_cache[hash] = result
 
             # Update meta information
             meta[hash] = {
