@@ -782,7 +782,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
 
             # Delete useless cache
             for dependency_definition in list(dependency_cache.keys()):
-                if working_directory is not None and dependency_definition not in stage["dependencies"]:
+                if dependency_definition not in stage["dependencies"]:
                     logger.info(f"Deleting from memory {dependency_definition}")
                     del dependency_cache[dependency_definition]
                 else:
@@ -792,7 +792,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             stage_dependency_info = {}
             for dependency_hash in stage["dependencies"]:
                 stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
-                if not dependency_hash in dependency_cache:
+                if working_directory is not None and not dependency_hash in dependency_cache:
                     with open("%s/%s.p" % (working_directory, dependency_hash), "rb") as f:
                         logger.info("Loading cache for %s ..." % dependency_hash)
                         dependency_cache[dependency_hash] = pickle.load(f)
