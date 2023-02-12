@@ -1,3 +1,3 @@
-from .pipeline import *
+from .synpp import *
 from .parallel import *
 from .stage import *
