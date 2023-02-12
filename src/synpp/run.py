@@ -188,21 +188,18 @@ def run(
 
     # General dependency cache to avoid loading the same cache in several
     # stages in a row.
-    dependency_cache = {}
     for hash in sorted_hashes:
         if hash in stale_hashes:
             logger.info(f"Executing stage {hash}...")
             stage = pipeline.get_stage(hash)
 
             # Delete useless cache
-            for dependency_definition in list(dependency_cache.keys()):
-                if dependency_definition not in stage["dependencies"]:
-                    logger.info(
-                        f"Deleting from memory {dependency_definition}"
-                    )
-                    del dependency_cache[dependency_definition]
-                else:
-                    logger.info(f"Keeping in memory {dependency_definition}")
+            for dependency_definition in list(cache.keys()):
+                if (
+                    dependency_definition not in stage["dependencies"]
+                    and working_directory is not None
+                ):
+                    del cache[dependency_definition]
 
             # Load stage dependencies and dependency infos
             stage_dependency_info = {}
@@ -212,9 +209,9 @@ def run(
                 )
                 if (
                     working_directory is not None
-                    and dependency_hash not in dependency_cache
+                    and dependency_hash not in cache
                 ):
-                    dependency_cache[dependency_hash] = pipeline.load_cache(
+                    cache[dependency_hash] = pipeline.load_cache(
                         dependency_hash
                     )
 
@@ -238,7 +235,6 @@ def run(
                 logger,
                 cache,
                 stage_dependency_info,
-                dependency_cache,
             )
             result = stage["wrapper"].execute(context)
             validation_token = stage["wrapper"].validate(
@@ -248,11 +244,9 @@ def run(
             if hash in required_hashes:
                 results[required_hashes.index(hash)] = result
 
-            if working_directory is None:
-                cache[hash] = result
-            else:
+            if working_directory is not None:
                 pipeline.save_cache(hash, result)
-                dependency_cache[hash] = result
+            cache[hash] = result
 
             # Update meta information
             metadata.set_data(
@@ -270,25 +264,21 @@ def run(
                 # Clear cache for ephemeral stages if they are no longer needed
                 pipeline.clear_ephemerals(stage["dependencies"])
 
-            logger.info("Finished running %s." % hash)
+            logger.info(f"Finished running {hash}.")
 
             progress += 1
             logger.info(
-                "Pipeline progress: %d/%d (%.2f%%)"
-                % (
-                    progress,
-                    len(stale_hashes),
-                    100 * progress / len(stale_hashes),
-                )
+                f"Pipeline progress: {progress}/{len(stale_hashes)}"
+                + f"({(100 * progress / len(stale_hashes)):.2f}%)"
             )
 
     if not rerun_required:
         # Load remaining previously cached results
         for hash in required_hashes:
             if results[required_hashes.index(hash)] is None:
-                with open("%s/%s.p" % (working_directory, hash), "rb") as f:
-                    logger.info("Loading cache for %s ..." % hash)
-                    results[required_hashes.index(hash)] = pickle.load(f)
+                results[required_hashes.index(hash)] = pipeline.load_cache(
+                    hash
+                )
 
     if verbose:
         info = {}

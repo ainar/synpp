@@ -153,8 +153,7 @@ class ExecuteContext(Context):
         pipeline_config,
         logger,
         cache,
-        dependency_info,
-        dependency_cache,
+        dependency_info
     ):
         """Construct."""
         self.required_config = required_config
@@ -164,7 +163,6 @@ class ExecuteContext(Context):
         self.cache_path = cache_path
         self.logger = logger
         self.stage_info = {}
-        self.dependency_cache = dependency_cache
         self.cache = cache
         self.dependency_info = dependency_info
         self.aliases = aliases
@@ -185,10 +183,7 @@ class ExecuteContext(Context):
             {"descriptor": name, "config": config}
         )
 
-        if self.working_directory is None:
-            return self.cache[dependency]
-        else:
-            return self.dependency_cache[dependency]
+        return self.cache[dependency]
 
     def path(self, name=None, config={}):
         """Get the stage cache path."""
