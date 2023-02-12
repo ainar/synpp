@@ -244,8 +244,6 @@ def run(
             if hash in required_hashes:
                 results[required_hashes.index(hash)] = result
 
-            if working_directory is not None:
-                pipeline.save_cache(hash, result)
             cache[hash] = result
 
             # Update meta information
@@ -260,6 +258,7 @@ def run(
             )
 
             if working_directory is not None:
+                pipeline.save_cache(hash, result)
                 metadata.update_json(working_directory)
                 # Clear cache for ephemeral stages if they are no longer needed
                 pipeline.clear_ephemerals(stage["dependencies"])
