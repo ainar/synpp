@@ -3,6 +3,10 @@ import hashlib
 import copy
 import inspect
 import json
+import os
+import stat
+import errno
+import shutil
 from collections.abc import MutableMapping
 
 
@@ -71,3 +75,24 @@ def hash_name(name, config):
         return "%s__%s" % (name, hash.hexdigest())
     else:
         return name
+
+
+def rmtree(path):
+    """
+    Delete a folder.
+
+    Extend shutil.rmtree, which by default refuses to delete write-protected
+    files on Windows. However, we often want to delete .git directories, which
+    are protected.
+    """
+
+    def handle_rmtree_error(delegate, path, exec):
+        if delegate in (os.rmdir, os.remove) and exec[1].errno == errno.EACCES:
+            os.chmod(path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
+            delegate(path)
+        else:
+            raise
+
+    return shutil.rmtree(
+        path, ignore_errors=False, onerror=handle_rmtree_error
+    )

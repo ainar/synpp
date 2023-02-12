@@ -2,57 +2,15 @@
 
 import logging
 import os
-import json
-import shutil
 import datetime
 import pickle
-import errno
-import stat
 
 import networkx as nx
-from networkx.readwrite.json_graph import node_link_data
 
-from .exceptions import PipelineError
 from .processing import process_stages
 from .stage import ValidateContext, ExecuteContext
-
-
-def rmtree(path):
-    """
-    Delete a folder.
-
-    Extend shutil.rmtree, which by default refuses to delete write-protected
-    files on Windows. However, we often want to delete .git directories, which
-    are protected.
-    """
-
-    def handle_rmtree_error(delegate, path, exec):
-        if delegate in (os.rmdir, os.remove) and exec[1].errno == errno.EACCES:
-            os.chmod(path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
-            delegate(path)
-        else:
-            raise
-
-    return shutil.rmtree(
-        path, ignore_errors=False, onerror=handle_rmtree_error
-    )
-
-
-def update_json(meta, working_directory):
-    """Update pipeline file."""
-    if os.path.exists("%s/pipeline.json" % working_directory):
-        shutil.move(
-            "%s/pipeline.json" % working_directory,
-            "%s/pipeline.json.bk" % working_directory,
-        )
-
-    with open("%s/pipeline.json.new" % working_directory, "w+") as f:
-        json.dump(meta, f)
-
-    shutil.move(
-        "%s/pipeline.json.new" % working_directory,
-        "%s/pipeline.json" % working_directory,
-    )
+from .pipeline import Pipeline, PipelineMetadata
+from .functions import rmtree
 
 
 def run(
@@ -70,14 +28,14 @@ def run(
 ):
     """Run the pipeline."""
     # 0) Construct pipeline config
-    pipeline_config = {}
+    pipeline = Pipeline(logger)
     if "processes" in config:
-        pipeline_config["processes"] = config["processes"]
+        pipeline.set_processes(config["processes"])
     if "progress_interval" in config:
-        pipeline_config["progress_interval"] = config["progress_interval"]
+        pipeline.set_progress_interval(config["progress_interval"])
 
     if ensure_working_directory and working_directory is None:
-        working_directory = ".synpp_cache"
+        pipeline.set_working_directory(".synpp_cache")
     if working_directory is not None:
         if not os.path.isdir(working_directory) and ensure_working_directory:
             logger.warning(
@@ -85,108 +43,47 @@ def run(
                 % working_directory
             )
             os.mkdir(working_directory)
-
-        working_directory = os.path.realpath(working_directory)
+        pipeline.set_working_directory(os.path.realpath(working_directory))
 
     # 1) Construct stage registry
-    registry = process_stages(definitions, config, externals, aliases)
+    pipeline.set_registry(
+        process_stages(definitions, config, externals, aliases)
+    )
 
     required_hashes = [None] * len(definitions)
-    for stage in registry.values():
+    for stage in pipeline.get_stages():
         if "required-index" in stage:
             required_hashes[stage["required-index"]] = stage["hash"]
 
-    logger.info("Found %d stages" % len(registry))
+    logger.info(f"Found {pipeline.get_stages_count()} stages")
 
     # 2) Order stages
-    graph = nx.DiGraph()
-    flowchart = nx.MultiDiGraph()  # graph to later plot
-
-    for hash in registry.keys():
-        graph.add_node(hash)
-
-    for stage in registry.values():
-        stage_name = stage["descriptor"]
-
-        if not flowchart.has_node(stage_name):
-            flowchart.add_node(stage_name)
-
-        for hash in stage["dependencies"]:
-            graph.add_edge(hash, stage["hash"])
-
-            dependency_name = registry.get(hash)["descriptor"]
-            if not flowchart.has_edge(dependency_name, stage_name):
-                flowchart.add_edge(dependency_name, stage_name)
+    pipeline.construct_graph()
 
     # Write out flowchart
     if flowchart_path is not None:
-        flowchart_directory = os.path.dirname(os.path.abspath(flowchart_path))
-        if not os.path.isdir(flowchart_directory):
-            raise PipelineError(
-                "Flowchart directory does not exist: %s" % flowchart_directory
-            )
-
-        logger.info(
-            "Writing pipeline flowchart to : {}".format(flowchart_path)
-        )
-        with open(flowchart_path, "w") as outfile:
-            json.dump(node_link_data(flowchart), outfile)
+        pipeline.output_flowchart(flowchart_path)
 
     if dryrun:
-        return node_link_data(flowchart)
+        return pipeline.get_node_link_data()
 
-    for cycle in nx.cycles.simple_cycles(graph):
-        cycle = [
-            registry[hash]["hash"] for hash in cycle
-        ]  # TODO: Make more verbose
-        raise PipelineError("Found cycle: %s" % " -> ".join(cycle))
+    pipeline.detect_cycles()
 
-    sorted_hashes = list(nx.topological_sort(graph))
+    sorted_hashes = pipeline.get_sorted_hashes()
 
     # Check where cache is available
-    cache_available = set()
-
-    if working_directory is not None:
-        for hash in sorted_hashes:
-            directory_path = "%s/%s.cache" % (working_directory, hash)
-            file_path = "%s/%s.p" % (working_directory, hash)
-
-            if os.path.exists(directory_path) and os.path.exists(file_path):
-                cache_available.add(hash)
-                registry[hash]["ephemeral"] = False
+    pipeline.check_available_cache()
 
     # Set up ephemeral stage counts
-    ephemeral_counts = {}
-
-    for stage in registry.values():
-        for hash in stage["dependencies"]:
-            dependency = registry[hash]
-
-            if dependency["ephemeral"] and hash not in cache_available:
-                if hash not in ephemeral_counts:
-                    ephemeral_counts[hash] = 0
-
-                ephemeral_counts[hash] += 1
+    pipeline.prepare_ephemeral()
 
     # 3) Load information about stages
-    meta = {}
-
+    metadata = PipelineMetadata(logger)
     if working_directory is not None:
-        try:
-            with open("%s/pipeline.json" % working_directory) as f:
-                meta = json.load(f)
-                logger.info(
-                    "Found pipeline metadata in %s/pipeline.json"
-                    % working_directory
-                )
-        except FileNotFoundError:
-            logger.info(
-                "Did not find pipeline metadata in %s/pipeline.json"
-                % working_directory
-            )
+        metadata.try_load_metadata(working_directory)
 
     # 4) Devalidate stages
-    sorted_cached_hashes = sorted_hashes - ephemeral_counts.keys()
+    sorted_cached_hashes = sorted_hashes - pipeline.get_ephemeral_stages()
     stale_hashes = set()
 
     # 4.1) Devalidate if they are required (optional, otherwise will reload
@@ -195,55 +92,45 @@ def run(
         stale_hashes.update(required_hashes)
 
     # 4.2) Devalidate if not in meta
-    for hash in sorted_cached_hashes:
-        if hash not in meta:
-            stale_hashes.add(hash)
-
-    # 4.3) Devalidate if configuration values have changed
-    # This devalidation step is obsolete since we have implicit config
-    # parameters.
+    stale_hashes.update(sorted_cached_hashes - metadata.get_hashes())
 
     # 4.4) Devalidate if module hash of a stage has changed
     for hash in sorted_cached_hashes:
-        if hash in meta:
-            if "module_hash" not in meta[hash]:
-                stale_hashes.add(hash)  # Backwards compatibility
-
-            else:
-                previous_module_hash = meta[hash]["module_hash"]
-                current_module_hash = registry[hash]["wrapper"].module_hash
-
-                if previous_module_hash != current_module_hash:
-                    stale_hashes.add(hash)
+        if hash in metadata.get_hashes():
+            if metadata.get_module_hash(hash) != pipeline.get_module_hash(
+                hash
+            ):
+                stale_hashes.add(hash)
 
     # 4.5) Devalidate if cache is not existant
     if working_directory is not None:
         for hash in sorted_cached_hashes:
-            directory_path = "%s/%s.cache" % (working_directory, hash)
-            file_path = "%s/%s.p" % (working_directory, hash)
-
-            if hash not in cache_available:
+            if not pipeline.has_cache(hash):
                 stale_hashes.add(hash)
 
     # 4.6) Devalidate if parent has been updated
     for hash in sorted_cached_hashes:
-        if hash not in stale_hashes and hash in meta:
-            for dependency_hash, dependency_update in meta[hash][
-                "dependencies"
-            ].items():
-                if dependency_hash not in meta:
+        if hash not in stale_hashes and metadata.has(hash):
+            for (
+                dependency_hash,
+                dependency_update,
+            ) in metadata.get_dependencies(hash).items():
+                if not metadata.has(dependency_hash):
                     stale_hashes.add(hash)
                 else:
-                    if meta[dependency_hash]["updated"] > dependency_update:
+                    if (
+                        metadata.get_stage(dependency_hash)["updated"]
+                        > dependency_update
+                    ):
                         stale_hashes.add(hash)
 
     # 4.7) Devalidate if parents are not the same anymore
     for hash in sorted_cached_hashes:
-        if hash not in stale_hashes and hash in meta:
-            cached_hashes = set(meta[hash]["dependencies"].keys())
+        if hash not in stale_hashes and metadata.has(hash):
+            cached_hashes = set(metadata.get_dependencies(hash).keys())
             current_hashes = set(
-                registry[hash]["dependencies"]
-                if "dependencies" in registry[hash]
+                pipeline.get_dependencies(hash)
+                if "dependencies" in pipeline.get_stage(hash)
                 else []
             )
 
@@ -251,24 +138,20 @@ def run(
                 stale_hashes.add(hash)
 
     # 4.8) Manually devalidate stages
-    for hash in sorted_cached_hashes:
-        stage = registry[hash]
-        cache_path = "%s/%s.cache" % (working_directory, hash)
-        context = ValidateContext(stage["config"], cache_path)
+    if working_directory:
+        for hash in sorted_cached_hashes:
+            stage = pipeline.get_stage(hash)
+            cache_path = pipeline.get_stage_cache_dir(hash)
+            context = ValidateContext(stage["config"], cache_path)
 
-        validation_token = stage["wrapper"].validate(context)
-        existing_token = (
-            meta[hash]["validation_token"]
-            if hash in meta and "validation_token" in meta[hash]
-            else None
-        )
-
-        if not validation_token == existing_token:
-            stale_hashes.add(hash)
+            if not stage["wrapper"].validate(
+                context
+            ) == metadata.get_validation_token(hash):
+                stale_hashes.add(hash)
 
     # 4.9) Devalidate descendants of devalidated stages
     for hash in set(stale_hashes):
-        for descendant_hash in nx.descendants(graph, hash):
+        for descendant_hash in nx.descendants(pipeline.graph, hash):
             if descendant_hash not in stale_hashes:
                 stale_hashes.add(descendant_hash)
 
@@ -276,8 +159,10 @@ def run(
     pending = set(stale_hashes)
 
     while len(pending) > 0:
-        for dependency_hash in registry[pending.pop()]["dependencies"]:
-            if registry[dependency_hash]["ephemeral"]:
+        for dependency_hash in pipeline.get_stage(pending.pop())[
+            "dependencies"
+        ]:
+            if pipeline.get_stage(dependency_hash)["ephemeral"]:
                 if dependency_hash not in stale_hashes:
                     pending.add(dependency_hash)
 
@@ -288,12 +173,10 @@ def run(
         logger.info("- %s" % hash)
 
     # 5) Reset meta information
-    for hash in stale_hashes:
-        if hash in meta:
-            del meta[hash]
+    metadata.reset(stale_hashes)
 
     if working_directory is not None:
-        update_json(meta, working_directory)
+        metadata.update_json(working_directory)
 
     logger.info("Successfully reset meta data")
 
@@ -308,8 +191,8 @@ def run(
     dependency_cache = {}
     for hash in sorted_hashes:
         if hash in stale_hashes:
-            logger.info("Executing stage %s ..." % hash)
-            stage = registry[hash]
+            logger.info(f"Executing stage {hash}...")
+            stage = pipeline.get_stage(hash)
 
             # Delete useless cache
             for dependency_definition in list(dependency_cache.keys()):
@@ -324,25 +207,22 @@ def run(
             # Load stage dependencies and dependency infos
             stage_dependency_info = {}
             for dependency_hash in stage["dependencies"]:
-                stage_dependency_info[dependency_hash] = meta[dependency_hash][
-                    "info"
-                ]
+                stage_dependency_info[dependency_hash] = metadata.get_info(
+                    dependency_hash
+                )
                 if (
                     working_directory is not None
                     and dependency_hash not in dependency_cache
                 ):
-                    with open(
-                        "%s/%s.p" % (working_directory, dependency_hash), "rb"
-                    ) as f:
-                        logger.info(
-                            "Loading cache for %s ..." % dependency_hash
-                        )
-                        dependency_cache[dependency_hash] = pickle.load(f)
+                    dependency_cache[dependency_hash] = pipeline.load_cache(
+                        dependency_hash
+                    )
 
             # Prepare cache path
-            cache_path = "%s/%s.cache" % (working_directory, hash)
-
-            if working_directory is not None:
+            if working_directory is None:
+                cache_path = None
+            else:
+                cache_path = pipeline.get_stage_cache_dir(hash)
                 if os.path.exists(cache_path):
                     rmtree(cache_path)
                 os.mkdir(cache_path)
@@ -354,7 +234,7 @@ def run(
                 working_directory,
                 stage["dependencies"],
                 cache_path,
-                pipeline_config,
+                pipeline.get_config(),
                 logger,
                 cache,
                 stage_dependency_info,
@@ -371,50 +251,24 @@ def run(
             if working_directory is None:
                 cache[hash] = result
             else:
-                with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
-                    logger.info("Writing cache for %s" % hash)
-                    pickle.dump(result, f, protocol=5)
+                pipeline.save_cache(hash, result)
                 dependency_cache[hash] = result
 
             # Update meta information
-            meta[hash] = {
-                "config": stage["config"],
-                "updated": datetime.datetime.utcnow().timestamp(),
-                "dependencies": {
-                    dependency_hash: meta[dependency_hash]["updated"]
-                    for dependency_hash in stage["dependencies"]
-                },
-                "info": context.stage_info,
-                "validation_token": validation_token,
-                "module_hash": stage["wrapper"].module_hash,
-            }
+            metadata.set_data(
+                hash,
+                stage["config"],
+                datetime.datetime.utcnow().timestamp(),
+                stage["dependencies"],
+                context.stage_info,
+                validation_token,
+                stage["wrapper"].module_hash,
+            )
 
             if working_directory is not None:
-                update_json(meta, working_directory)
-
-            # Clear cache for ephemeral stages if they are no longer needed
-            if working_directory is not None:
-                for dependency_hash in stage["dependencies"]:
-                    if dependency_hash in ephemeral_counts:
-                        ephemeral_counts[dependency_hash] -= 1
-
-                        if ephemeral_counts[dependency_hash] == 0:
-                            cache_directory_path = "%s/%s.cache" % (
-                                working_directory,
-                                dependency_hash,
-                            )
-                            cache_file_path = "%s/%s.p" % (
-                                working_directory,
-                                dependency_hash,
-                            )
-
-                            rmtree(cache_directory_path)
-                            os.remove(cache_file_path)
-
-                            logger.info(
-                                "Removed ephemeral %s." % dependency_hash
-                            )
-                            del ephemeral_counts[dependency_hash]
+                metadata.update_json(working_directory)
+                # Clear cache for ephemeral stages if they are no longer needed
+                pipeline.clear_ephemerals(stage["dependencies"])
 
             logger.info("Finished running %s." % hash)
 
@@ -439,14 +293,14 @@ def run(
     if verbose:
         info = {}
 
-        for hash in sorted(meta.keys()):
-            info.update(meta[hash]["info"])
+        for hash in sorted(metadata.get_hashes()):
+            info.update(metadata.get_info(hash))
 
         return {
             "results": results,
             "stale": stale_hashes,
             "info": info,
-            "flowchart": node_link_data(flowchart),
+            "flowchart": pipeline.get_node_link_data(),
         }
     else:
         return results
