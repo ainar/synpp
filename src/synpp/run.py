@@ -3,7 +3,7 @@
 import logging
 import os
 import datetime
-import pickle
+import multiprocessing
 
 import networkx as nx
 
@@ -11,6 +11,11 @@ from .processing import process_stages
 from .stage import ValidateContext, ExecuteContext
 from .pipeline import Pipeline, PipelineMetadata
 from .functions import rmtree
+
+
+def execute_wrapper(func, context, queue: multiprocessing.Queue):
+    result = func(context)
+    queue.put((result, context.stage_info))
 
 
 def run(
@@ -236,7 +241,15 @@ def run(
                 cache,
                 stage_dependency_info,
             )
-            result = stage["wrapper"].execute(context)
+            result_queue = multiprocessing.Queue(maxsize=1)
+
+            process = multiprocessing.Process(
+                target=execute_wrapper,
+                args=(stage["wrapper"].execute, context, result_queue),
+            )
+            process.start()
+            result, stage_info = result_queue.get()
+
             validation_token = stage["wrapper"].validate(
                 ValidateContext(stage["config"], cache_path)
             )
@@ -252,7 +265,7 @@ def run(
                 stage["config"],
                 datetime.datetime.utcnow().timestamp(),
                 stage["dependencies"],
-                context.stage_info,
+                stage_info,
                 validation_token,
                 stage["wrapper"].module_hash,
             )
