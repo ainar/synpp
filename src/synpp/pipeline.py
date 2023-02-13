@@ -860,14 +860,14 @@ class Synpp:
         self.externals = externals
         self.aliases = aliases
 
-    def run_pipeline(self, definitions=None, rerun_required=True, dryrun=None, verbose=False, flowchart_path=None):
+    def run_pipeline(self, definitions=None, rerun_required=True, dryrun=None, verbose=False):
         if definitions is None and self.definitions is None:
             raise PipelineError("A list of stage definitions must be available in object or provided explicitly.")
         elif definitions is None:
             definitions = self.definitions
         if dryrun is None:
             dryrun = self.dryrun
-        return run(definitions, self.config, self.working_directory, flowchart_path=flowchart_path,
+        return run(definitions, self.config, self.working_directory, flowchart_path=self.flowchart_path,
                    dryrun=dryrun, verbose=verbose, logger=self.logger, rerun_required=rerun_required,
                    ensure_working_directory=True, externals=self.externals, aliases=self.aliases)
 
