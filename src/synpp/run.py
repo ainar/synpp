@@ -2,20 +2,13 @@
 
 import logging
 import os
-import datetime
-import multiprocessing
 
 import networkx as nx
 
 from .processing import process_stages
-from .stage import ValidateContext, ExecuteContext
-from .pipeline import Pipeline, PipelineMetadata
-from .functions import rmtree
-
-
-def execute_wrapper(func, context, queue: multiprocessing.Queue):
-    result = func(context)
-    queue.put((result, context.stage_info))
+from .stage import ValidateContext
+from .pipeline import Pipeline
+from .pipeline_metadata import PipelineMetadata
 
 
 def run(
@@ -86,6 +79,7 @@ def run(
     metadata = PipelineMetadata(logger)
     if working_directory is not None:
         metadata.try_load_metadata(working_directory)
+    pipeline.set_metadata(metadata)
 
     # 4) Devalidate stages
     sorted_cached_hashes = sorted_hashes - pipeline.get_ephemeral_stages()
@@ -100,63 +94,63 @@ def run(
     stale_hashes.update(sorted_cached_hashes - metadata.get_hashes())
 
     # 4.4) Devalidate if module hash of a stage has changed
-    for hash in sorted_cached_hashes:
-        if hash in metadata.get_hashes():
-            if metadata.get_module_hash(hash) != pipeline.get_module_hash(
-                hash
+    for stage_hash in sorted_cached_hashes:
+        if stage_hash in metadata.get_hashes():
+            if metadata.get_module_hash(stage_hash) != pipeline.get_module_hash(
+                stage_hash
             ):
-                stale_hashes.add(hash)
+                stale_hashes.add(stage_hash)
 
     # 4.5) Devalidate if cache is not existant
     if working_directory is not None:
-        for hash in sorted_cached_hashes:
-            if not pipeline.has_cache(hash):
-                stale_hashes.add(hash)
+        for stage_hash in sorted_cached_hashes:
+            if not pipeline.has_cache(stage_hash):
+                stale_hashes.add(stage_hash)
 
     # 4.6) Devalidate if parent has been updated
-    for hash in sorted_cached_hashes:
-        if hash not in stale_hashes and metadata.has(hash):
+    for stage_hash in sorted_cached_hashes:
+        if stage_hash not in stale_hashes and metadata.has(stage_hash):
             for (
                 dependency_hash,
                 dependency_update,
-            ) in metadata.get_dependencies(hash).items():
+            ) in metadata.get_dependencies(stage_hash).items():
                 if not metadata.has(dependency_hash):
-                    stale_hashes.add(hash)
+                    stale_hashes.add(stage_hash)
                 else:
                     if (
                         metadata.get_stage(dependency_hash)["updated"]
                         > dependency_update
                     ):
-                        stale_hashes.add(hash)
+                        stale_hashes.add(stage_hash)
 
     # 4.7) Devalidate if parents are not the same anymore
-    for hash in sorted_cached_hashes:
-        if hash not in stale_hashes and metadata.has(hash):
-            cached_hashes = set(metadata.get_dependencies(hash).keys())
+    for stage_hash in sorted_cached_hashes:
+        if stage_hash not in stale_hashes and metadata.has(stage_hash):
+            cached_hashes = set(metadata.get_dependencies(stage_hash).keys())
             current_hashes = set(
-                pipeline.get_dependencies(hash)
-                if "dependencies" in pipeline.get_stage(hash)
+                pipeline.get_dependencies(stage_hash)
+                if "dependencies" in pipeline.get_stage(stage_hash)
                 else []
             )
 
             if not cached_hashes == current_hashes:
-                stale_hashes.add(hash)
+                stale_hashes.add(stage_hash)
 
     # 4.8) Manually devalidate stages
     if working_directory:
-        for hash in sorted_cached_hashes:
-            stage = pipeline.get_stage(hash)
-            cache_path = pipeline.get_stage_cache_dir(hash)
+        for stage_hash in sorted_cached_hashes:
+            stage = pipeline.get_stage(stage_hash)
+            cache_path = pipeline.get_stage_cache_dir(stage_hash)
             context = ValidateContext(stage["config"], cache_path)
 
             if not stage["wrapper"].validate(
                 context
-            ) == metadata.get_validation_token(hash):
-                stale_hashes.add(hash)
+            ) == metadata.get_validation_token(stage_hash):
+                stale_hashes.add(stage_hash)
 
     # 4.9) Devalidate descendants of devalidated stages
-    for hash in set(stale_hashes):
-        for descendant_hash in nx.descendants(pipeline.graph, hash):
+    for stage_hash in set(stale_hashes):
+        for descendant_hash in nx.descendants(pipeline.graph, stage_hash):
             if descendant_hash not in stale_hashes:
                 stale_hashes.add(descendant_hash)
 
@@ -174,8 +168,8 @@ def run(
                 stale_hashes.add(dependency_hash)
 
     logger.info("Devalidating %d stages:" % len(stale_hashes))
-    for hash in stale_hashes:
-        logger.info("- %s" % hash)
+    for stage_hash in stale_hashes:
+        logger.info("- %s" % stage_hash)
 
     # 5) Reset meta information
     metadata.reset(stale_hashes)
@@ -186,97 +180,17 @@ def run(
     logger.info("Successfully reset meta data")
 
     # 6) Execute stages
-    results = [None] * len(definitions)
-    cache = {}
-
+    results = dict()
     progress = 0
 
     # General dependency cache to avoid loading the same cache in several
     # stages in a row.
-    for hash in sorted_hashes:
-        if hash in stale_hashes:
-            logger.info(f"Executing stage {hash}...")
-            stage = pipeline.get_stage(hash)
+    for stage_hash in sorted_hashes:
+        if stage_hash in stale_hashes:
+            result = pipeline.execute_stage(stage_hash)
 
-            # Delete useless cache
-            for dependency_definition in list(cache.keys()):
-                if (
-                    dependency_definition not in stage["dependencies"]
-                    and working_directory is not None
-                ):
-                    del cache[dependency_definition]
-
-            # Load stage dependencies and dependency infos
-            stage_dependency_info = {}
-            for dependency_hash in stage["dependencies"]:
-                stage_dependency_info[dependency_hash] = metadata.get_info(
-                    dependency_hash
-                )
-                if (
-                    working_directory is not None
-                    and dependency_hash not in cache
-                ):
-                    cache[dependency_hash] = pipeline.load_cache(
-                        dependency_hash
-                    )
-
-            # Prepare cache path
-            if working_directory is None:
-                cache_path = None
-            else:
-                cache_path = pipeline.get_stage_cache_dir(hash)
-                if os.path.exists(cache_path):
-                    rmtree(cache_path)
-                os.mkdir(cache_path)
-
-            context = ExecuteContext(
-                stage["config"],
-                stage["required_stages"],
-                stage["aliases"],
-                working_directory,
-                stage["dependencies"],
-                cache_path,
-                pipeline.get_config(),
-                logger,
-                cache,
-                stage_dependency_info,
-            )
-            result_queue = multiprocessing.Queue(maxsize=1)
-
-            process = multiprocessing.Process(
-                target=execute_wrapper,
-                args=(stage["wrapper"].execute, context, result_queue),
-            )
-            process.start()
-            result, stage_info = result_queue.get()
-
-            validation_token = stage["wrapper"].validate(
-                ValidateContext(stage["config"], cache_path)
-            )
-
-            if hash in required_hashes:
-                results[required_hashes.index(hash)] = result
-
-            cache[hash] = result
-
-            # Update meta information
-            metadata.set_data(
-                hash,
-                stage["config"],
-                datetime.datetime.utcnow().timestamp(),
-                stage["dependencies"],
-                stage_info,
-                validation_token,
-                stage["wrapper"].module_hash,
-            )
-
-            if working_directory is not None:
-                pipeline.save_cache(hash, result)
-                metadata.update_json(working_directory)
-                # Clear cache for ephemeral stages if they are no longer needed
-                pipeline.clear_ephemerals(stage["dependencies"])
-
-            logger.info(f"Finished running {hash}.")
+            if stage_hash in required_hashes:
+                results[stage_hash] = result
 
             progress += 1
             logger.info(
@@ -286,23 +200,21 @@ def run(
 
     if not rerun_required:
         # Load remaining previously cached results
-        for hash in required_hashes:
-            if results[required_hashes.index(hash)] is None:
-                results[required_hashes.index(hash)] = pipeline.load_cache(
-                    hash
-                )
+        for stage_hash in required_hashes:
+            if stage_hash not in results:
+                results[stage_hash] = pipeline.load_cache(stage_hash)
 
     if verbose:
         info = {}
 
-        for hash in sorted(metadata.get_hashes()):
-            info.update(metadata.get_info(hash))
+        for stage_hash in sorted(metadata.get_hashes()):
+            info.update(metadata.get_info(stage_hash))
 
         return {
-            "results": results,
+            "results": list(results.values()),
             "stale": stale_hashes,
             "info": info,
             "flowchart": pipeline.get_node_link_data(),
         }
     else:
-        return results
+        return list(results.values())

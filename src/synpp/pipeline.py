@@ -1,13 +1,21 @@
 """Class file for Pipeline class."""
 import os
 import json
-import shutil
 import pickle
 import networkx as nx
+import multiprocessing as mp
+import datetime
 from networkx.readwrite.json_graph import node_link_data
 
 from .exceptions import PipelineError
 from .functions import rmtree
+from .stage import ExecuteContext, ValidateContext
+from .pipeline_metadata import PipelineMetadata
+
+
+def execute_wrapper(func, context, queue: mp.Queue):
+    result = func(context)
+    queue.put((result, context.stage_info))
 
 
 class Pipeline:
@@ -20,6 +28,11 @@ class Pipeline:
         self.processes = None
         self.working_directory = None
         self.cache_available = set()
+        self.metadata: PipelineMetadata = None
+        self.cache = dict()
+
+    def set_metadata(self, metadata):
+        self.metadata = metadata
 
     def set_progress_interval(self, progress_interval) -> None:
         self.progress_interval = progress_interval
@@ -173,84 +186,85 @@ class Pipeline:
     def get_dependencies(self, hash):
         return self.registry[hash]["dependencies"]
 
+    def execute_stage(self, stage_hash):
+        self.logger.info(f"Executing stage {stage_hash}...")
+        stage = self.get_stage(stage_hash)
 
-class PipelineMetadata:
-    def __init__(self, logger) -> None:
-        self.logger = logger
-        self.meta = {}
+        # Delete useless cache
+        for dependency_definition in list(self.cache.keys()):
+            if (
+                dependency_definition not in stage["dependencies"]
+                and self.working_directory is not None
+            ):
+                del self.cache[dependency_definition]
 
-    def try_load_metadata(self, working_directory):
-        path = os.path.join(working_directory, "pipeline.json")
-        try:
-            with open(path) as f:
-                self.meta = json.load(f)
-                self.logger.info(f"Found pipeline metadata in {path}")
-        except FileNotFoundError:
-            self.logger.info(f"Did not find pipeline metadata in {path}")
-
-    def get_hashes(self):
-        return self.meta.keys()
-
-    def get_module_hash(self, hash):
-        return self.meta[hash]["module_hash"]
-
-    def get_stage(self, hash):
-        return self.meta[hash]
-
-    def get_dependencies(self, hash):
-        return self.meta[hash]["dependencies"]
-
-    def has(self, hash):
-        return hash in self.meta
-
-    def update_json(self, working_directory):
-        """Update pipeline file."""
-        if os.path.exists("%s/pipeline.json" % working_directory):
-            shutil.move(
-                "%s/pipeline.json" % working_directory,
-                "%s/pipeline.json.bk" % working_directory,
+        # Load stage dependencies and dependency infos
+        stage_dependency_info = {}
+        for dependency_hash in stage["dependencies"]:
+            stage_dependency_info[dependency_hash] = self.metadata.get_info(
+                dependency_hash
             )
+            if (
+                self.working_directory is not None
+                and dependency_hash not in self.cache
+            ):
+                self.cache[dependency_hash] = self.load_cache(
+                    dependency_hash
+                )
 
-        with open("%s/pipeline.json.new" % working_directory, "w+") as f:
-            json.dump(self.meta, f)
+        # Prepare cache path
+        if self.working_directory is None:
+            cache_path = None
+        else:
+            cache_path = self.get_stage_cache_dir(stage_hash)
+            if os.path.exists(cache_path):
+                rmtree(cache_path)
+            os.mkdir(cache_path)
 
-        shutil.move(
-            "%s/pipeline.json.new" % working_directory,
-            "%s/pipeline.json" % working_directory,
+        context = ExecuteContext(
+            stage["config"],
+            stage["required_stages"],
+            stage["aliases"],
+            self.working_directory,
+            stage["dependencies"],
+            cache_path,
+            self.get_config(),
+            self.logger,
+            self.cache,
+            stage_dependency_info,
+        )
+        result_queue = mp.Queue(maxsize=1)
+
+        process = mp.Process(
+            target=execute_wrapper,
+            args=(stage["wrapper"].execute, context, result_queue),
+        )
+        process.start()
+        result, stage_info = result_queue.get()
+
+        validation_token = stage["wrapper"].validate(
+            ValidateContext(stage["config"], cache_path)
         )
 
-    def reset(self, hashes):
-        for hash in hashes:
-            if self.has(hash):
-                del self.meta[hash]
+        self.cache[stage_hash] = result
 
-    def get_validation_token(self, hash):
-        try:
-            return self.meta[hash]["validation_token"]
-        except KeyError:
-            return None
+        # Update meta information
+        self.metadata.set_data(
+            stage_hash,
+            stage["config"],
+            datetime.datetime.utcnow().timestamp(),
+            stage["dependencies"],
+            stage_info,
+            validation_token,
+            stage["wrapper"].module_hash,
+        )
 
-    def get_info(self, hash):
-        return self.meta[hash]["info"]
+        if self.working_directory is not None:
+            self.save_cache(stage_hash, result)
+            self.metadata.update_json(self.working_directory)
+            # Clear cache for ephemeral stages if they are no longer needed
+            self.clear_ephemerals(stage["dependencies"])
 
-    def set_data(
-        self,
-        hash,
-        config,
-        updated,
-        dependencies,
-        info,
-        validation_token,
-        module_hash,
-    ):
-        self.meta[hash] = {
-            "config": config,
-            "updated": updated,
-            "dependencies": {
-                dependency_hash: self.get_stage(dependency_hash)["updated"]
-                for dependency_hash in dependencies
-            },
-            "info": info,
-            "validation_token": validation_token,
-            "module_hash": module_hash,
-        }
+        self.logger.info(f"Finished running {stage_hash}.")
+
+        return result
