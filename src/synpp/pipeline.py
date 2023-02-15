@@ -677,9 +677,9 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
         stale_hashes.update(required_hashes)
 
     # 4.2) Devalidate if not in meta
-    for hash in sorted_cached_hashes:
-        if not hash in meta:
-            stale_hashes.add(hash)
+    # for hash in sorted_cached_hashes:
+    #     if not hash in meta:
+    #         stale_hashes.add(hash)
 
     # 4.3) Devalidate if configuration values have changed
     # This devalidation step is obsolete since we have implicit config parameters
@@ -727,15 +727,16 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
 
     # 4.8) Manually devalidate stages
     for hash in sorted_cached_hashes:
-        stage = registry[hash]
-        cache_path = "%s/%s.cache" % (working_directory, hash)
-        context = ValidateContext(stage["config"], cache_path)
+        if hash in meta:
+            stage = registry[hash]
+            cache_path = "%s/%s.cache" % (working_directory, hash)
+            context = ValidateContext(stage["config"], cache_path)
 
-        validation_token = stage["wrapper"].validate(context)
-        existing_token = meta[hash]["validation_token"] if hash in meta and "validation_token" in meta[hash] else None
+            validation_token = stage["wrapper"].validate(context)
+            existing_token = meta[hash]["validation_token"] if hash in meta and "validation_token" in meta[hash] else None
 
-        if not validation_token == existing_token:
-            stale_hashes.add(hash)
+            if not validation_token == existing_token:
+                stale_hashes.add(hash)
 
     # 4.9) Devalidate descendants of devalidated stages
     for hash in set(stale_hashes):
