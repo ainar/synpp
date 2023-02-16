@@ -707,14 +707,14 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 stale_hashes.add(hash)
 
     # 4.6) Devalidate if parent has been updated
-    for hash in sorted_cached_hashes:
-        if not hash in stale_hashes and hash in meta:
-            for dependency_hash, dependency_update in meta[hash]["dependencies"].items():
-                if not dependency_hash in meta:
-                    stale_hashes.add(hash)
-                else:
-                    if meta[dependency_hash]["updated"] > dependency_update:
-                        stale_hashes.add(hash)
+    # for hash in sorted_cached_hashes:
+    #     if not hash in stale_hashes and hash in meta:
+    #         for dependency_hash, dependency_update in meta[hash]["dependencies"].items():
+    #             if not dependency_hash in meta:
+    #                 stale_hashes.add(hash)
+    #             else:
+    #                 if meta[dependency_hash]["updated"] > dependency_update:
+    #                     stale_hashes.add(hash)
 
     # 4.7) Devalidate if parents are not the same anymore
     for hash in sorted_cached_hashes:
