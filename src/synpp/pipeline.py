@@ -640,7 +640,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             directory_path = "%s/%s.cache" % (working_directory, hash)
             file_path = "%s/%s.p" % (working_directory, hash)
 
-            if os.path.exists(directory_path) and os.path.exists(file_path):
+            if os.path.exists(file_path):
                 cache_available.add(hash)
                 registry[hash]["ephemeral"] = False
 
