@@ -658,15 +658,15 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 ephemeral_counts[hash] += 1
 
     # 3) Load information about stages
-    meta = {}
+    # meta = {}
 
-    if not working_directory is None:
-        try:
-            with open("%s/pipeline.json" % working_directory) as f:
-                meta = json.load(f)
-                logger.info("Found pipeline metadata in %s/pipeline.json" % working_directory)
-        except FileNotFoundError:
-            logger.info("Did not find pipeline metadata in %s/pipeline.json" % working_directory)
+    # if not working_directory is None:
+    #     try:
+    #         with open("%s/pipeline.json" % working_directory) as f:
+    #             meta = json.load(f)
+    #             logger.info("Found pipeline metadata in %s/pipeline.json" % working_directory)
+    #     except FileNotFoundError:
+    #         logger.info("Did not find pipeline metadata in %s/pipeline.json" % working_directory)
 
     # 4) Devalidate stages
     sorted_cached_hashes = sorted_hashes - ephemeral_counts.keys()
@@ -675,6 +675,8 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     # 4.1) Devalidate if they are required (optional, otherwise will reload from cache)
     if rerun_required:
         stale_hashes.update(required_hashes)
+        print(f"Devalidate {required_hashes} bc required")
+
 
     # 4.2) Devalidate if not in meta
     # for hash in sorted_cached_hashes:
@@ -685,17 +687,19 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     # This devalidation step is obsolete since we have implicit config parameters
 
     # 4.4) Devalidate if module hash of a stage has changed
-    for hash in sorted_cached_hashes:
-        if hash in meta:
-            if not "module_hash" in meta[hash]:
-                stale_hashes.add(hash) # Backwards compatibility
+    # for hash in sorted_cached_hashes:
+    #     if hash in meta:
+    #         if not "module_hash" in meta[hash]:
+    #             stale_hashes.add(hash) # Backwards compatibility
+    #             print(f"Devalidate {hash} bc module hash changed (no module hash)")
 
-            else:
-                previous_module_hash = meta[hash]["module_hash"]
-                current_module_hash = registry[hash]["wrapper"].module_hash
+    #         else:
+    #             previous_module_hash = meta[hash]["module_hash"]
+    #             current_module_hash = registry[hash]["wrapper"].module_hash
 
-                if previous_module_hash != current_module_hash:
-                    stale_hashes.add(hash)
+    #             if previous_module_hash != current_module_hash:
+    #                 print(f"Devalidate {hash} bc module hash changed")
+    #                 stale_hashes.add(hash)
 
     # 4.5) Devalidate if cache is not existant
     if not working_directory is None:
@@ -704,6 +708,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             file_path = "%s/%s.p" % (working_directory, hash)
 
             if not hash in cache_available:
+                print(f"Devalidate {hash} bc no cache")
                 stale_hashes.add(hash)
 
     # 4.6) Devalidate if parent has been updated
@@ -717,31 +722,34 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     #                     stale_hashes.add(hash)
 
     # 4.7) Devalidate if parents are not the same anymore
-    for hash in sorted_cached_hashes:
-        if not hash in stale_hashes and hash in meta:
-            cached_hashes = set(meta[hash]["dependencies"].keys())
-            current_hashes = set(registry[hash]["dependencies"] if "dependencies" in registry[hash] else [])
+    # for hash in sorted_cached_hashes:
+    #     if not hash in stale_hashes and hash in meta:
+    #         cached_hashes = set(meta[hash]["dependencies"].keys())
+    #         current_hashes = set(registry[hash]["dependencies"] if "dependencies" in registry[hash] else [])
 
-            if not cached_hashes == current_hashes:
-                stale_hashes.add(hash)
+    #         if not cached_hashes == current_hashes:
+    #             print(f"Devalidate {hash} bc parent not the same")
+    #             stale_hashes.add(hash)
 
     # 4.8) Manually devalidate stages
-    for hash in sorted_cached_hashes:
-        if hash in meta:
-            stage = registry[hash]
-            cache_path = "%s/%s.cache" % (working_directory, hash)
-            context = ValidateContext(stage["config"], cache_path)
+    # for hash in sorted_cached_hashes:
+    #     if hash in meta:
+    #         stage = registry[hash]
+    #         cache_path = "%s/%s.cache" % (working_directory, hash)
+    #         context = ValidateContext(stage["config"], cache_path)
 
-            validation_token = stage["wrapper"].validate(context)
-            existing_token = meta[hash]["validation_token"] if hash in meta and "validation_token" in meta[hash] else None
+    #         validation_token = stage["wrapper"].validate(context)
+    #         existing_token = meta[hash]["validation_token"] if hash in meta and "validation_token" in meta[hash] else None
 
-            if not validation_token == existing_token:
-                stale_hashes.add(hash)
+    #         if not validation_token == existing_token:
+    #             print(f"Devalidate {hash} manually")
+    #             stale_hashes.add(hash)
 
     # 4.9) Devalidate descendants of devalidated stages
     for hash in set(stale_hashes):
         for descendant_hash in nx.descendants(graph, hash):
             if not descendant_hash in stale_hashes:
+                print(f"Devalidate {hash} bc descendent of devalidated")
                 stale_hashes.add(descendant_hash)
 
     # 4.10) Devalidate ephemeral stages if necessary
@@ -754,17 +762,21 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                     pending.add(dependency_hash)
 
                 stale_hashes.add(dependency_hash)
+                print(f"Devalidate {dependency_hash} bc ephemeral")
 
     logger.info("Devalidating %d stages:" % len(stale_hashes))
     for hash in stale_hashes: logger.info("- %s" % hash)
 
+    # for hash in sorted_cached_hashes:
+    #     if not hash in meta:
+    #         meta[hash] = dict()
     # 5) Reset meta information
-    for hash in stale_hashes:
-        if hash in meta:
-            del meta[hash]
+    # for hash in stale_hashes:
+    #     if hash in meta:
+    #         del meta[hash]
 
-    if not working_directory is None:
-        update_json(meta, working_directory)
+    # if not working_directory is None:
+    #     update_json(meta, working_directory)
 
     logger.info("Successfully reset meta data")
 
@@ -792,7 +804,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             # Load stage dependencies and dependency infos
             stage_dependency_info = {}
             for dependency_hash in stage["dependencies"]:
-                stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
+                # stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
                 if working_directory is not None and not dependency_hash in dependency_cache:
                     with open("%s/%s.p" % (working_directory, dependency_hash), "rb") as f:
                         logger.info("Loading cache for %s ..." % dependency_hash)
@@ -822,19 +834,19 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 dependency_cache[hash] = result
 
             # Update meta information
-            meta[hash] = {
-                "config": stage["config"],
-                "updated": datetime.datetime.utcnow().timestamp(),
-                "dependencies": {
-                    dependency_hash: meta[dependency_hash]["updated"] for dependency_hash in stage["dependencies"]
-                },
-                "info": context.stage_info,
-                "validation_token": validation_token,
-                "module_hash": stage["wrapper"].module_hash
-            }
+            # meta[hash] = {
+            #     "config": stage["config"],
+            #     "updated": datetime.datetime.utcnow().timestamp(),
+            #     "dependencies": {
+            #         dependency_hash: meta[dependency_hash]["updated"] for dependency_hash in stage["dependencies"]
+            #     },
+            #     "info": context.stage_info,
+            #     "validation_token": validation_token,
+            #     "module_hash": stage["wrapper"].module_hash
+            # }
 
-            if not working_directory is None:
-                update_json(meta, working_directory)
+            # if not working_directory is None:
+            #     update_json(meta, working_directory)
 
             # Clear cache for ephemeral stages if they are no longer needed
             if not working_directory is None:
