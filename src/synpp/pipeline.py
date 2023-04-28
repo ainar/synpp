@@ -310,7 +310,7 @@ class ValidateContext(Context):
 
 
 class ExecuteContext(Context):
-    def __init__(self, required_config, required_stages, aliases, working_directory, dependencies, cache_path, pipeline_config, logger, cache, dependency_info, dependency_cache):
+    def __init__(self, required_config, required_stages, aliases, working_directory, dependencies, cache_path, pipeline_config, logger, cache, dependency_info):
         self.required_config = required_config
         self.working_directory = working_directory
         self.dependencies = dependencies
@@ -318,7 +318,6 @@ class ExecuteContext(Context):
         self.cache_path = cache_path
         self.logger = logger
         self.stage_info = {}
-        self.dependency_cache = dependency_cache
         self.cache = cache
         self.dependency_info = dependency_info
         self.aliases = aliases
@@ -335,10 +334,12 @@ class ExecuteContext(Context):
     def stage(self, name, config = {}):
         dependency = self._get_dependency({ "descriptor": name, "config": config })
 
-        if self.working_directory is None:
-            return self.cache[dependency]
-        else:
-            return self.dependency_cache[dependency]
+        if not self.working_directory is None and not dependency in self.cache:
+            with open("%s/%s.p" % (self.working_directory, dependency), "rb") as f:
+                self.logger.info("Loading cache for %s ..." % dependency)
+                self.cache[dependency] = pickle.load(f)
+
+        return self.cache[dependency]
 
     def path(self, name = None, config = {}):
         if self.working_directory is None:
@@ -773,29 +774,29 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
 
     progress = 0
 
-    # General dependency cache to avoid loading the same cache in several stages in a row.
-    dependency_cache = {}
     for hash in sorted_hashes:
         if hash in stale_hashes:
             logger.info("Executing stage %s ..." % hash)
             stage = registry[hash]
 
-            # Delete useless cache
-            for dependency_definition in list(dependency_cache.keys()):
-                if dependency_definition not in stage["dependencies"]:
-                    logger.info(f"Deleting from memory {dependency_definition}")
-                    del dependency_cache[dependency_definition]
-                else:
-                    logger.info(f"Keeping in memory {dependency_definition}")
+            # Load the dependencies, either from cache or from file
+            #stage_dependencies = []
+            #stage_dependency_info = {}
 
-            # Load stage dependencies and dependency infos
+            #if name in dependencies:
+            #    stage_dependencies = dependencies[name]
+            #
+            #    for parent in stage_dependencies:
+            #        stage_dependency_info[parent] = meta[parent]["info"]
+            #stage_dependencies =
+            if not working_directory is None:
+                for dependency_definition in list(cache.keys()):
+                    if dependency_definition not in stage["dependencies"]:
+                        del cache[dependency_definition]  # Delete useless cache
+
             stage_dependency_info = {}
             for dependency_hash in stage["dependencies"]:
                 stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
-                if working_directory is not None and not dependency_hash in dependency_cache:
-                    with open("%s/%s.p" % (working_directory, dependency_hash), "rb") as f:
-                        logger.info("Loading cache for %s ..." % dependency_hash)
-                        dependency_cache[dependency_hash] = pickle.load(f)
 
             # Prepare cache path
             cache_path = "%s/%s.cache" % (working_directory, hash)
@@ -805,20 +806,18 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                     rmtree(cache_path)
                 os.mkdir(cache_path)
 
-            context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info, dependency_cache)
+            context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info)
             result = stage["wrapper"].execute(context)
             validation_token = stage["wrapper"].validate(ValidateContext(stage["config"], cache_path))
 
             if hash in required_hashes:
                 results[required_hashes.index(hash)] = result
 
-            if working_directory is None:
-                cache[hash] = result
-            else:
+            cache[hash] = result
+            if not working_directory is None:
                 with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
                     logger.info("Writing cache for %s" % hash)
-                    pickle.dump(result, f, protocol=5)
-                dependency_cache[hash] = result
+                    pickle.dump(result, f, protocol=4)
 
             # Update meta information
             meta[hash] = {
