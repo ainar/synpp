@@ -144,3 +144,62 @@ def test_is_config_requested():
                       {'descriptor': "tests.fixtures.devalidation.A2"}])
     assert res1[0] == 10
     assert res2[0] == 5
+
+
+class ComplexStageWithResult:
+    def configure(self, context):
+        context.config("option.sub")
+
+    def execute(self, context):
+        return context.config("option")["sub"]
+
+
+class ComplexStageWithResultMaster:
+    def configure(self, context):
+        context.stage(ComplexStageWithResult, alias=0)
+
+    def execute(self, context):
+        return context.stage(0)
+
+
+def test_nested_config():
+    res = synpp.run([{'descriptor': ComplexStageWithResultMaster, 'config': {"option.sub": 3}}])
+    assert res[0] == 3
+
+class ListBasedStage:
+    def configure(self, context):
+        context.config("list_option")
+
+    def execute(self, context):
+        return "=".join(context.config("list_option"))
+
+class ListBasedStageTop:
+    def configure(self, context):
+        context.stage(ListBasedStage)
+
+    def execute(self, context):
+        return context.stage(ListBasedStage)
+
+def test_list_configuration(tmpdir):
+    working_directory = tmpdir.mkdir("sub")
+
+    output = synpp.run([{'descriptor': ListBasedStageTop, 'config': {
+        "list_option": ["a", "b", "c"]
+    }}], verbose = True, working_directory = working_directory)
+
+    assert 2 == len(output["stale"])
+    assert output["results"][0] == "a=b=c"
+
+    output = synpp.run([{'descriptor': ListBasedStageTop, 'config': {
+        "list_option": ["a", "b", "c"]
+    }}], verbose = True, working_directory = working_directory)
+
+    assert 1 == len(output["stale"])
+    assert output["results"][0] == "a=b=c"
+
+    output = synpp.run([{'descriptor': ListBasedStageTop, 'config': {
+        "list_option": ["a", "b", "y"]
+    }}], verbose = True, working_directory = working_directory)
+
+    assert 2 == len(output["stale"])
+    assert output["results"][0] == "a=b=y"
