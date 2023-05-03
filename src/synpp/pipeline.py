@@ -780,7 +780,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     results = manager.list([None] * len(definitions))
     cache = manager.dict()
 
-    process_manager = ProcessManager(logger)
+    process_manager = ProcessManager(logger, available_processors=pipeline_config["processes"] if "processes" in pipeline_config else mp.cpu_count())
     # Create processes and add them with dependencies in process manager
     for hash in sorted_hashes:
         if hash in stale_hashes:
