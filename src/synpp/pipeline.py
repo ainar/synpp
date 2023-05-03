@@ -567,7 +567,7 @@ def update_json(meta, working_directory):
         shutil.move("%s/pipeline.json" % working_directory, "%s/pipeline.json.bk" % working_directory)
 
     with open("%s/pipeline.json.new" % working_directory, "w+") as f:
-        json.dump(meta, f)
+        json.dump(meta.copy(), f)
 
     shutil.move("%s/pipeline.json.new" % working_directory, "%s/pipeline.json" % working_directory)
 
@@ -664,12 +664,14 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 ephemeral_counts[hash] += 1
 
     # 3) Load information about stages
-    meta = {}
+    manager = mp.Manager()
+    meta = manager.dict()
 
     if not working_directory is None:
         try:
             with open("%s/pipeline.json" % working_directory) as f:
-                meta = json.load(f)
+                for key, value in json.load(f).items():
+                    meta[key] = value
                 logger.info("Found pipeline metadata in %s/pipeline.json" % working_directory)
         except FileNotFoundError:
             logger.info("Did not find pipeline metadata in %s/pipeline.json" % working_directory)
@@ -774,29 +776,20 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     logger.info("Successfully reset meta data")
 
     # 6) Execute stages
-    results = [None] * len(definitions)
-    cache = {}
+    results = manager.list([None] * len(definitions))
+    cache = manager.dict()
 
     progress = 0
 
     for hash in sorted_hashes:
         if hash in stale_hashes:
             stage = registry[hash]
-            result_queue = mp.Queue(1)
-            meta_queue = mp.Queue(1)
-            args = (hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, result_queue, meta_queue)
+            args = (hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, results, required_hashes)
             process = mp.Process(target=run_stage, args=args)
             process.start()
-            result = result_queue.get()
-            meta_stage = meta_queue.get()
             process.join()
 
-            meta[hash] = meta_stage
-            if hash in required_hashes:
-                results[required_hashes.index(hash)] = result
-            if working_directory is None:
-                cache[hash] = result
-            else:
+            if not working_directory is None:
                 update_json(meta, working_directory)
             progress += 1
             logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
@@ -826,7 +819,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     else:
         return results
 
-def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, result_queue, meta_queue):
+def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, results, required_hashes):
     logger.info("Executing stage %s ..." % hash)
 
     stage_dependency_info = {}
@@ -843,17 +836,20 @@ def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pi
 
     context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info)
     result = stage["wrapper"].execute(context)
-    result_queue.put(result)
     validation_token = stage["wrapper"].validate(ValidateContext(stage["config"], cache_path))
 
+    if hash in required_hashes:
+        results[required_hashes.index(hash)] = result
 
-    if not working_directory is None:
+    if working_directory is None:
+        cache[hash] = result
+    else:
         with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
             logger.info("Writing cache for %s" % hash)
             pickle.dump(result, f, protocol=4)
 
     # Update meta information
-    meta_queue.put({
+    meta[hash] = {
         "config": stage["config"],
         "updated": datetime.datetime.utcnow().timestamp(),
         "dependencies": {
@@ -862,7 +858,7 @@ def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pi
         "info": context.stage_info,
         "validation_token": validation_token,
         "module_hash": stage["wrapper"].module_hash
-    })
+    }
 
 
     # Clear cache for ephemeral stages if they are no longer needed
