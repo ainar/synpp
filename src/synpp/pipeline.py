@@ -13,6 +13,7 @@ import shutil
 from typing import Dict, List, Union, Callable
 from types import ModuleType
 from collections.abc import MutableMapping
+import multiprocessing as mp
 
 import networkx as nx
 import yaml
@@ -781,7 +782,15 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     for hash in sorted_hashes:
         if hash in stale_hashes:
             stage = registry[hash]
-            result, meta_stage = run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache)
+            result_queue = mp.Queue(1)
+            meta_queue = mp.Queue(1)
+            args = (hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, result_queue, meta_queue)
+            process = mp.Process(target=run_stage, args=args)
+            process.start()
+            result = result_queue.get()
+            meta_stage = meta_queue.get()
+            process.join()
+
             meta[hash] = meta_stage
             if hash in required_hashes:
                 results[required_hashes.index(hash)] = result
@@ -817,7 +826,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     else:
         return results
 
-def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache):
+def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, result_queue, meta_queue):
     logger.info("Executing stage %s ..." % hash)
 
     stage_dependency_info = {}
@@ -834,6 +843,7 @@ def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pi
 
     context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info)
     result = stage["wrapper"].execute(context)
+    result_queue.put(result)
     validation_token = stage["wrapper"].validate(ValidateContext(stage["config"], cache_path))
 
 
@@ -843,7 +853,7 @@ def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pi
             pickle.dump(result, f, protocol=4)
 
     # Update meta information
-    meta_stage = {
+    meta_queue.put({
         "config": stage["config"],
         "updated": datetime.datetime.utcnow().timestamp(),
         "dependencies": {
@@ -852,7 +862,7 @@ def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pi
         "info": context.stage_info,
         "validation_token": validation_token,
         "module_hash": stage["wrapper"].module_hash
-    }
+    })
 
 
     # Clear cache for ephemeral stages if they are no longer needed
@@ -872,8 +882,6 @@ def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pi
                     del ephemeral_counts[dependency_hash]
 
     logger.info("Finished running %s." % hash)
-
-    return result, meta_stage
 
 
 def run_from_yaml(path):
