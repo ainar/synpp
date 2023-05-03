@@ -780,16 +780,14 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     results = manager.list([None] * len(definitions))
     cache = manager.dict()
 
-    processes = {}
     process_manager = ProcessManager()
     # Create processes and add them with dependencies in process manager
     for hash in sorted_hashes:
         if hash in stale_hashes:
             stage = registry[hash]
             args = (hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, results, required_hashes)
-            processes[hash] = mp.Process(target=run_stage, args=args)
-            process_dependencies = [processes[dependency_hash] for dependency_hash in stage["dependencies"] if dependency_hash in stale_hashes]
-            process_manager.add(processes[hash], dependencies=process_dependencies)
+            process_dependencies = [dependency_hash for dependency_hash in stage["dependencies"] if dependency_hash in stale_hashes]
+            process_manager.add(hash, run_stage, args, dependencies=process_dependencies)
 
     def update():
         if not working_directory is None:
