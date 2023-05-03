@@ -780,79 +780,15 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
 
     for hash in sorted_hashes:
         if hash in stale_hashes:
-            logger.info("Executing stage %s ..." % hash)
             stage = registry[hash]
-
-            # Load the dependencies, either from cache or from file
-            #stage_dependencies = []
-            #stage_dependency_info = {}
-
-            #if name in dependencies:
-            #    stage_dependencies = dependencies[name]
-            #
-            #    for parent in stage_dependencies:
-            #        stage_dependency_info[parent] = meta[parent]["info"]
-            #stage_dependencies =
-
-            stage_dependency_info = {}
-            for dependency_hash in stage["dependencies"]:
-                stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
-
-            # Prepare cache path
-            cache_path = "%s/%s.cache" % (working_directory, hash)
-
-            if not working_directory is None:
-                if os.path.exists(cache_path):
-                    rmtree(cache_path)
-                os.mkdir(cache_path)
-
-            context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info)
-            result = stage["wrapper"].execute(context)
-            validation_token = stage["wrapper"].validate(ValidateContext(stage["config"], cache_path))
-
+            result, meta_stage = run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache)
+            meta[hash] = meta_stage
             if hash in required_hashes:
                 results[required_hashes.index(hash)] = result
-
             if working_directory is None:
                 cache[hash] = result
             else:
-                with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
-                    logger.info("Writing cache for %s" % hash)
-                    pickle.dump(result, f, protocol=4)
-
-            # Update meta information
-            meta[hash] = {
-                "config": stage["config"],
-                "updated": datetime.datetime.utcnow().timestamp(),
-                "dependencies": {
-                    dependency_hash: meta[dependency_hash]["updated"] for dependency_hash in stage["dependencies"]
-                },
-                "info": context.stage_info,
-                "validation_token": validation_token,
-                "module_hash": stage["wrapper"].module_hash
-            }
-
-            if not working_directory is None:
                 update_json(meta, working_directory)
-
-            # Clear cache for ephemeral stages if they are no longer needed
-            if not working_directory is None:
-                for dependency_hash in stage["dependencies"]:
-                    if dependency_hash in ephemeral_counts:
-                        ephemeral_counts[dependency_hash] -= 1
-
-                        if ephemeral_counts[dependency_hash] == 0:
-                            cache_directory_path = "%s/%s.cache" % (working_directory, dependency_hash)
-                            cache_file_path = "%s/%s.p" % (working_directory, dependency_hash)
-
-                            rmtree(cache_directory_path)
-                            os.remove(cache_file_path)
-
-                            logger.info("Removed ephemeral %s." % dependency_hash)
-                            del ephemeral_counts[dependency_hash]
-
-            logger.info("Finished running %s." % hash)
-
             progress += 1
             logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
                 progress, len(stale_hashes), 100 * progress / len(stale_hashes)
@@ -880,6 +816,64 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
         }
     else:
         return results
+
+def run_stage(hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache):
+    logger.info("Executing stage %s ..." % hash)
+
+    stage_dependency_info = {}
+    for dependency_hash in stage["dependencies"]:
+        stage_dependency_info[dependency_hash] = meta[dependency_hash]["info"]
+
+    # Prepare cache path
+    cache_path = "%s/%s.cache" % (working_directory, hash)
+
+    if not working_directory is None:
+        if os.path.exists(cache_path):
+            rmtree(cache_path)
+        os.mkdir(cache_path)
+
+    context = ExecuteContext(stage["config"], stage["required_stages"], stage["aliases"], working_directory, stage["dependencies"], cache_path, pipeline_config, logger, cache, stage_dependency_info)
+    result = stage["wrapper"].execute(context)
+    validation_token = stage["wrapper"].validate(ValidateContext(stage["config"], cache_path))
+
+
+    if not working_directory is None:
+        with open("%s/%s.p" % (working_directory, hash), "wb+") as f:
+            logger.info("Writing cache for %s" % hash)
+            pickle.dump(result, f, protocol=4)
+
+    # Update meta information
+    meta_stage = {
+        "config": stage["config"],
+        "updated": datetime.datetime.utcnow().timestamp(),
+        "dependencies": {
+            dependency_hash: meta[dependency_hash]["updated"] for dependency_hash in stage["dependencies"]
+        },
+        "info": context.stage_info,
+        "validation_token": validation_token,
+        "module_hash": stage["wrapper"].module_hash
+    }
+
+
+    # Clear cache for ephemeral stages if they are no longer needed
+    if not working_directory is None:
+        for dependency_hash in stage["dependencies"]:
+            if dependency_hash in ephemeral_counts:
+                ephemeral_counts[dependency_hash] -= 1
+
+                if ephemeral_counts[dependency_hash] == 0:
+                    cache_directory_path = "%s/%s.cache" % (working_directory, dependency_hash)
+                    cache_file_path = "%s/%s.p" % (working_directory, dependency_hash)
+
+                    rmtree(cache_directory_path)
+                    os.remove(cache_file_path)
+
+                    logger.info("Removed ephemeral %s." % dependency_hash)
+                    del ephemeral_counts[dependency_hash]
+
+    logger.info("Finished running %s." % hash)
+
+    return result, meta_stage
 
 
 def run_from_yaml(path):
