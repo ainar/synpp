@@ -780,7 +780,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     results = manager.list([None] * len(definitions))
     cache = manager.dict()
 
-    process_manager = ProcessManager()
+    process_manager = ProcessManager(logger)
     # Create processes and add them with dependencies in process manager
     for hash in sorted_hashes:
         if hash in stale_hashes:
@@ -792,12 +792,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     def update():
         if not working_directory is None:
             update_json(meta, working_directory)
-        update.progress += 1
-        logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
-            update.progress, len(stale_hashes), 100 * update.progress / len(stale_hashes)
-        ))
 
-    update.progress = 0
     process_manager.callback = update
     process_manager.start()
 

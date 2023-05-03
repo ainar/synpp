@@ -2,10 +2,11 @@ import multiprocessing as mp
 
 
 class ProcessManager:
-    def __init__(self, available_processors=mp.cpu_count()):
+    def __init__(self, logger, available_processors=mp.cpu_count()):
         self.pending = []
         self.started = set()
         self.done = set()
+        self.logger = logger
         self.available_processors = available_processors
         self._count = 0
 
@@ -32,12 +33,14 @@ class ProcessManager:
             ), "Dependencies must be already added in the ProcessManager"
 
         self.pending.append((name, target, args, dependencies, proc_usage))
+        self._count += 1
 
     def _poll(self, name):
         return name in self.done
 
     def start(self):
         """Start processes wrt dependencies."""
+        progress = 0
         while len(self.pending) > 0:
             running = []
             # Find all processes with already done dependencies.
@@ -73,3 +76,8 @@ class ProcessManager:
                 self.started = set()
             if self.callback is not None:
                 self.callback()
+
+            progress += len(running)
+            self.logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
+                progress, self._count, 100 * progress / self._count
+            ))
