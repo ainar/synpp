@@ -22,6 +22,7 @@ from networkx.readwrite.json_graph import node_link_data
 from .general import PipelineError
 from .parallel import ParallelMasterContext, ParalelMockMasterContext
 from .progress import ProgressContext
+from .process_manager import ProcessManager
 
 # The following two functions extend shutil.rmtree, because by default it
 # refuses to delete write-protected files on Windows. However, we often want
@@ -779,22 +780,28 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     results = manager.list([None] * len(definitions))
     cache = manager.dict()
 
-    progress = 0
-
+    processes = {}
+    process_manager = ProcessManager()
+    # Create processes and add them with dependencies in process manager
     for hash in sorted_hashes:
         if hash in stale_hashes:
             stage = registry[hash]
             args = (hash, stage, logger, working_directory, meta, ephemeral_counts, pipeline_config, cache, results, required_hashes)
-            process = mp.Process(target=run_stage, args=args)
-            process.start()
-            process.join()
+            processes[hash] = mp.Process(target=run_stage, args=args)
+            process_dependencies = [processes[dependency_hash] for dependency_hash in stage["dependencies"] if dependency_hash in stale_hashes]
+            process_manager.add(processes[hash], dependencies=process_dependencies)
 
-            if not working_directory is None:
-                update_json(meta, working_directory)
-            progress += 1
-            logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
-                progress, len(stale_hashes), 100 * progress / len(stale_hashes)
-            ))
+    def update():
+        if not working_directory is None:
+            update_json(meta, working_directory)
+        update.progress += 1
+        logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
+            update.progress, len(stale_hashes), 100 * update.progress / len(stale_hashes)
+        ))
+
+    update.progress = 0
+    process_manager.callback = update
+    process_manager.start()
 
     if not rerun_required:
         # Load remaining previously cached results
