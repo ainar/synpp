@@ -73,18 +73,19 @@ class ProcessManager:
                     process.close()
                     del self.running_processes[name]
                     self.done.add(name)
+                    if self.callback is not None:
+                        self.callback()
+                    self.show_progress()
                     break
                 else:
                     assert process.exitcode is None, "An error occured."
 
-            if self.callback is not None:
-                self.callback()
-
-            self.logger.info(
-                "Pipeline progress: %d/%d (%.2f%%)"
-                % (
-                    len(self.done),
-                    self._count,
-                    100 * len(self.done) / self._count,
-                )
+    def _show_progress(self):
+        self.logger.info(
+            "Pipeline progress: %d/%d (%.2f%%)"
+            % (
+                len(self.done),
+                self._count,
+                100 * len(self.done) / self._count,
             )
+        )
