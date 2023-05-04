@@ -67,18 +67,27 @@ class ProcessManager:
                 del self.pending[name]
 
             # Wait for the first process to join.
-            for name, (process, cpu_usage) in self.running_processes.items():
-                process.join(0.1)
-                if process.exitcode == 0:
-                    process.close()
-                    del self.running_processes[name]
-                    self.done.add(name)
-                    if self.callback is not None:
-                        self.callback()
-                    self.show_progress()
+            process_done = False
+            while True:
+                for name, (
+                    process,
+                    cpu_usage,
+                ) in self.running_processes.items():
+                    process.join(0.1)
+                    if process.exitcode == 0:
+                        process.close()
+                        del self.running_processes[name]
+                        self.done.add(name)
+                        process_done = True
+                        break
+                    else:
+                        assert process.exitcode is None, "An error occured."
+                if process_done:
                     break
-                else:
-                    assert process.exitcode is None, "An error occured."
+
+            if self.callback is not None:
+                self.callback()
+            self._show_progress()
 
     def _show_progress(self):
         self.logger.info(
