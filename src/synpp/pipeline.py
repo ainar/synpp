@@ -652,7 +652,8 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 registry[hash]["ephemeral"] = False
 
     # Set up ephemeral stage counts
-    ephemeral_counts = {}
+    manager = mp.Manager()
+    ephemeral_counts = manager.dict()
 
     for stage in registry.values():
         for hash in stage["dependencies"]:
@@ -665,7 +666,6 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
                 ephemeral_counts[hash] += 1
 
     # 3) Load information about stages
-    manager = mp.Manager()
     meta = manager.dict()
 
     if not working_directory is None:
@@ -678,7 +678,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             logger.info("Did not find pipeline metadata in %s/pipeline.json" % working_directory)
 
     # 4) Devalidate stages
-    sorted_cached_hashes = sorted_hashes - ephemeral_counts.keys()
+    sorted_cached_hashes = set(sorted_hashes) - set(ephemeral_counts.keys())
     stale_hashes = set()
 
     # 4.1) Devalidate if they are required (optional, otherwise will reload from cache)
@@ -780,7 +780,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
     results = manager.list([None] * len(definitions))
     cache = manager.dict()
 
-    process_manager = ProcessManager(logger, available_processors=pipeline_config["processes"] if "processes" in pipeline_config else mp.cpu_count())
+    process_manager = ProcessManager(logger, total_cpu=pipeline_config["processes"] if "processes" in pipeline_config else mp.cpu_count())
     # Create processes and add them with dependencies in process manager
     for hash in sorted_hashes:
         if hash in stale_hashes:

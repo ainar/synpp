@@ -1,14 +1,16 @@
 import multiprocessing as mp
+import time
 
 
 class ProcessManager:
-    def __init__(self, logger, available_processors=mp.cpu_count()):
-        self.pending = []
+    def __init__(self, logger, total_cpu=mp.cpu_count()):
+        self.pending = dict()
         self.started = set()
         self.done = set()
         self.logger = logger
-        self.available_processors = available_processors
+        self.total_cpu = total_cpu
         self._count = 0
+        self.running_processes = dict()
 
     def add(self, name, target, args, proc_usage=1, dependencies=None):
         """
@@ -18,66 +20,71 @@ class ProcessManager:
         :param proc_usage: the processing usage of the process
         :param dependencies: the dependencies (must be present in the manager)
         """
-        assert proc_usage <= self.available_processors, (
+        assert proc_usage <= self.total_cpu, (
             "Process usage to high "
-            + f"({proc_usage} asked, {self.available_processors} available)"
+            + f"({proc_usage} asked, {self.total_cpu} available)"
         )
 
         if dependencies is None:
             dependencies = []
         else:
             assert set(dependencies).issubset(
-                set([name for name, _, _, _, _ in self.pending]).union(
-                    self.started
-                )
+                set(self.pending.keys()).union(self.started)
             ), "Dependencies must be already added in the ProcessManager"
 
-        self.pending.append((name, target, args, dependencies, proc_usage))
+        self.pending[name] = target, args, dependencies, proc_usage
         self._count += 1
 
     def _poll(self, name):
         return name in self.done
 
+    def _free_cpu(self):
+        used = sum(
+            cpu_usage for _p, cpu_usage in self.running_processes.values()
+        )
+        return self.total_cpu - used
+
     def start(self):
         """Start processes wrt dependencies."""
-        progress = 0
         while len(self.pending) > 0:
-            running = []
             # Find all processes with already done dependencies.
-            available_processors = self.available_processors
-            for name, target, args, dependencies, proc_usage in self.pending:
-                if available_processors >= proc_usage:
+            newly_started = set()
+            for name, (
+                target,
+                args,
+                dependencies,
+                cpu_usage,
+            ) in self.pending.items():
+                if self._free_cpu() >= cpu_usage:
                     if all(self._poll(dep) for dep in dependencies):
                         process = mp.Process(target=target, args=args)
                         process.start()
-                        running.append(process)
+                        self.running_processes[name] = process, cpu_usage
                         self.started.add(name)
-                        available_processors -= proc_usage
+                        newly_started.add(name)
 
-            # Delete from pending processes and from dependencies of the other
-            # processes.
-            self.pending = [
-                (
-                    name,
-                    target,
-                    args,
-                    [dep for dep in deps if dep not in self.started],
-                    proc_usage,
-                )
-                for name, target, args, deps, proc_usage in self.pending
-                if name not in self.started
-            ]
+            for name in newly_started:
+                del self.pending[name]
 
-            # Wait for processes.
-            for process in running:
-                process.join()
-                process.close()
-                self.done = self.started
-                self.started = set()
+            # Wait for the first process to join.
+            for name, (process, cpu_usage) in self.running_processes.items():
+                process.join(0.1)
+                if process.exitcode == 0:
+                    process.close()
+                    del self.running_processes[name]
+                    self.done.add(name)
+                    break
+                else:
+                    assert process.exitcode is None, "An error occured."
+
             if self.callback is not None:
                 self.callback()
 
-            progress += len(running)
-            self.logger.info("Pipeline progress: %d/%d (%.2f%%)" % (
-                progress, self._count, 100 * progress / self._count
-            ))
+            self.logger.info(
+                "Pipeline progress: %d/%d (%.2f%%)"
+                % (
+                    len(self.done),
+                    self._count,
+                    100 * len(self.done) / self._count,
+                )
+            )
