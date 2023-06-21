@@ -629,7 +629,7 @@ def run(definitions, config = {}, working_directory = None, flowchart_path = Non
             json.dump(node_link_data(flowchart), outfile)
 
     if dryrun:
-        return node_link_data(flowchart)
+        return graph
 
     for cycle in nx.cycles.simple_cycles(graph):
         cycle = [registry[hash]["hash"] for hash in cycle] # TODO: Make more verbose
